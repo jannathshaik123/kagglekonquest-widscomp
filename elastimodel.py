@@ -1,68 +1,184 @@
-from sklearn.linear_model import ElasticNet
-from sklearn.preprocessing import StandardScaler, RobustScaler
+import numpy as np
+from sklearn.preprocessing import StandardScaler, RobustScaler, PowerTransformer
+from sklearn.decomposition import PCA
 from sklearn.pipeline import Pipeline
-from sklearn.model_selection import GridSearchCV
+from sklearn.linear_model import ElasticNet
+from sklearn.ensemble import StackingRegressor
+from sklearn.model_selection import GridSearchCV, KFold, cross_val_score, cross_validate
+import pandas as pd
 
-# Create a pipeline that includes scaling and ElasticNet
-def create_elastic_pipeline(scaler_type='standard'):
-    if scaler_type == 'standard':
-        scaler = StandardScaler()
-    else:
-        scaler = RobustScaler()
+def enhance_connectome_features(features_df):
+    """Enhanced feature engineering for connectome data"""
+    # Create copy to avoid modifying original
+    df = features_df.copy()
     
+    # Add network-level features
+    for i in range(0, 19900, 200):  # Assuming 200x200 matrix
+        region_features = df.iloc[:, i:i+200]
+        df[f'region_{i//200}_mean'] = region_features.mean(axis=1)
+        df[f'region_{i//200}_std'] = region_features.std(axis=1)
+        df[f'region_{i//200}_max'] = region_features.max(axis=1)
+    
+    # Add global network features
+    df['global_mean'] = df.filter(like='feature_').mean(axis=1)
+    df['global_std'] = df.filter(like='feature_').std(axis=1)
+    df['global_connectivity'] = df.filter(like='feature_').sum(axis=1)
+    
+    return df
+
+def create_optimized_elastic_pipeline():
+    """Create an optimized pipeline for ElasticNet with feature processing"""
     pipeline = Pipeline([
-        ('scaler', scaler),
+        ('scaler', PowerTransformer(method='yeo-johnson')),
+        ('pca', PCA(n_components=0.95)),
         ('elasticnet', ElasticNet(random_state=42))
     ])
     
-    # Define parameter grid with more granular values
     param_grid = {
-        'elasticnet__alpha': [0.001, 0.005, 0.01, 0.05, 0.1, 0.5],
-        'elasticnet__l1_ratio': [0.01, 0.03, 0.05, 0.1, 0.2, 0.3],
-        'elasticnet__tol': [1e-4, 1e-3],
+        'elasticnet__alpha': [0.001, 0.005, 0.01, 0.05, 0.1],
+        'elasticnet__l1_ratio': [0.01, 0.03, 0.05, 0.1, 0.15],
+        'elasticnet__tol': [1e-4],
         'elasticnet__max_iter': [10000]
     }
     
     return pipeline, param_grid
 
-# Function to train and evaluate models
-def train_elastic_models(X_train, y_train, X_test, y_test):
-    models = {}
+def create_stacked_model():
+    """Create a stacked model combining ElasticNet with other regressors"""
+    estimators = [
+        ('elasticnet1', ElasticNet(alpha=0.01, l1_ratio=0.03)),
+        ('elasticnet2', ElasticNet(alpha=0.1, l1_ratio=0.05)),
+        ('elasticnet3', ElasticNet(alpha=0.05, l1_ratio=0.01))
+    ]
     
-    # Try both scaling approaches
-    for scaler_type in ['standard', 'robust']:
-        pipeline, param_grid = create_elastic_pipeline(scaler_type)
-        
-        # Perform grid search with cross-validation
-        grid_search = GridSearchCV(
-            pipeline,
-            param_grid,
-            cv=5,
-            scoring='neg_root_mean_squared_error',
-            n_jobs=-1,
-            verbose=1
-        )
-        
-        # Fit the model
-        grid_search.fit(X_train, y_train)
-        
-        # Store the results
-        models[f'elasticnet_{scaler_type}'] = {
-            'model': grid_search.best_estimator_,
+    stacked_model = StackingRegressor(
+        estimators=estimators,
+        final_estimator=ElasticNet(alpha=0.01, l1_ratio=0.03),
+        cv=5
+    )
+    
+    return stacked_model
+
+def evaluate_model_cv(model, X, y, cv_splits=5, random_state=42):
+    """Evaluate model using cross-validation with multiple metrics"""
+    cv = KFold(n_splits=cv_splits, shuffle=True, random_state=random_state)
+    
+    # Define scoring metrics
+    scoring = {
+        'rmse': 'neg_root_mean_squared_error',
+        'mae': 'neg_mean_absolute_error',
+        'r2': 'r2'
+    }
+    
+    # Perform cross-validation
+    scores = cross_validate(
+        model,
+        X,
+        y,
+        cv=cv,
+        scoring=scoring,
+        return_train_score=True,
+        n_jobs=-1
+    )
+    
+    # Process scores
+    results = {
+        'test_rmse': -scores['test_rmse'],
+        'train_rmse': -scores['train_rmse'],
+        'test_mae': -scores['test_mae'],
+        'train_mae': -scores['train_mae'],
+        'test_r2': scores['test_r2'],
+        'train_r2': scores['train_r2']
+    }
+    
+    # Calculate statistics
+    stats = {metric: {
+        'mean': np.mean(scores),
+        'std': np.std(scores),
+        'min': np.min(scores),
+        'max': np.max(scores)
+    } for metric, scores in results.items()}
+    
+    return stats
+
+def train_and_evaluate_models(X, y, n_splits=5, random_state=42):
+    """Train both single and stacked models with cross-validation"""
+    # Enhance features
+    X_enhanced = enhance_connectome_features(X)
+    
+    # Create and train models
+    pipeline, param_grid = create_optimized_elastic_pipeline()
+    stacked_model = create_stacked_model()
+    
+    # GridSearch for single model with cross-validation
+    grid_search = GridSearchCV(
+        pipeline,
+        param_grid,
+        cv=n_splits,
+        scoring='neg_root_mean_squared_error',
+        n_jobs=-1,
+        verbose=1
+    )
+    grid_search.fit(X_enhanced, y)
+    
+    # Get best single model
+    best_single_model = grid_search.best_estimator_
+    
+    # Train stacked model
+    stacked_model.fit(X_enhanced, y)
+    
+    # Evaluate both models with cross-validation
+    single_model_stats = evaluate_model_cv(best_single_model, X_enhanced, y, 
+                                         cv_splits=n_splits, random_state=random_state)
+    stacked_model_stats = evaluate_model_cv(stacked_model, X_enhanced, y, 
+                                          cv_splits=n_splits, random_state=random_state)
+    
+    return {
+        'single_model': {
+            'model': best_single_model,
             'best_params': grid_search.best_params_,
-            'best_score': -grid_search.best_score_  # Convert back to positive RMSE
+            'cv_stats': single_model_stats
+        },
+        'stacked_model': {
+            'model': stacked_model,
+            'cv_stats': stacked_model_stats
         }
-    
-    return models
+    }
+
+def print_cv_results(results):
+    """Print formatted cross-validation results"""
+    for model_name, model_info in results.items():
+        print(f"\n{model_name.replace('_', ' ').title()} Results:")
+        stats = model_info['cv_stats']
+        
+        print("\nRMSE:")
+        print(f"Test - Mean: {stats['test_rmse']['mean']:.3f} ± {stats['test_rmse']['std']:.3f}")
+        print(f"Train - Mean: {stats['train_rmse']['mean']:.3f} ± {stats['train_rmse']['std']:.3f}")
+        
+        print("\nMAE:")
+        print(f"Test - Mean: {stats['test_mae']['mean']:.3f} ± {stats['test_mae']['std']:.3f}")
+        print(f"Train - Mean: {stats['train_mae']['mean']:.3f} ± {stats['train_mae']['std']:.3f}")
+        
+        print("\nR²:")
+        print(f"Test - Mean: {stats['test_r2']['mean']:.3f} ± {stats['test_r2']['std']:.3f}")
+        print(f"Train - Mean: {stats['train_r2']['mean']:.3f} ± {stats['train_r2']['std']:.3f}")
+        
+        if 'best_params' in model_info:
+            print("\nBest Parameters:", model_info['best_params'])
 
 # Example usage:
 """
-# Assuming you have your data split into X_train, X_test, y_train, y_test
-models = train_elastic_models(X_train, y_train, X_test, y_test)
+# Train and evaluate models with cross-validation
+results = train_and_evaluate_models(X, y, n_splits=5, random_state=42)
 
-# Print results for each model
-for name, model_info in models.items():
-    print(f"\n{name}:")
-    print(f"Best RMSE: {model_info['best_score']:.3f}")
-    print("Best parameters:", model_info['best_params'])
+# Print detailed results
+print_cv_results(results)
+
+# Save the model with better average RMSE
+if results['single_model']['cv_stats']['test_rmse']['mean'] < results['stacked_model']['cv_stats']['test_rmse']['mean']:
+    best_model = results['single_model']['model']
+else:
+    best_model = results['stacked_model']['model']
+
+joblib.dump(best_model, os.path.join(DATA_PATH, 'best_model.joblib'))
 """
