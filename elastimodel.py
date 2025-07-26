@@ -1,11 +1,57 @@
-import numpy as np
-from sklearn.preprocessing import StandardScaler, RobustScaler, PowerTransformer
-from sklearn.decomposition import PCA
+
 from sklearn.pipeline import Pipeline
-from sklearn.linear_model import ElasticNet
-from sklearn.ensemble import StackingRegressor
-from sklearn.model_selection import GridSearchCV, KFold, cross_val_score, cross_validate
 import pandas as pd
+import numpy as np
+import os
+from sklearn.model_selection import train_test_split, GridSearchCV, KFold,GridSearchCV, cross_validate,cross_val_score
+from sklearn.preprocessing import StandardScaler, PowerTransformer, LabelEncoder, RobustScaler
+from sklearn.linear_model import LassoCV, RidgeCV, ElasticNetCV,ElasticNet
+from sklearn.metrics import mean_squared_error, r2_score, mean_absolute_error
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.decomposition import PCA
+from sklearn.ensemble import StackingRegressor
+
+
+# Define paths
+BASE_PATH = "widsdatathon2025-university"
+TRAIN_PATH = os.path.join(BASE_PATH, "train_tsv/train_tsv")
+TEST_PATH = os.path.join(BASE_PATH, "test_tsv/test_tsv")
+METADATA_PATH = os.path.join(BASE_PATH, "metadata")
+DATA_PATH = "data"  # New folder for processed data
+
+# Create data directory if it doesn't exist
+os.makedirs(DATA_PATH, exist_ok=True)
+
+def preprocess_data(data, encoders=None, is_training=True):
+    """
+    Comprehensive preprocessing including categorical variables
+    """
+    if encoders is None:
+        encoders = {}
+    
+    # Handle categorical columns
+    categorical_cols = ['sex', 'study_site', 'ethnicity', 'race', 'handedness', 
+                       'parent_1_education', 'parent_2_education']
+    
+    for col in categorical_cols:
+        if col in data.columns:
+            if is_training:
+                # Create new encoder for training data
+                encoders[col] = LabelEncoder()
+                data[col] = encoders[col].fit_transform(data[col].fillna('missing'))
+            else:
+                # Use existing encoder for test data
+                data[col] = encoders[col].transform(data[col].fillna('missing'))
+    
+    # Handle numerical missing values
+    numerical_cols = ['bmi', 'p_factor_fs', 'internalizing_fs', 'externalizing_fs', 'attention_fs']
+    for col in numerical_cols:
+        if col in data.columns:
+            data[col] = data[col].fillna(data[col].mean())
+    
+    return data, encoders
+
 
 def enhance_connectome_features(features_df):
     """Enhanced feature engineering for connectome data"""
@@ -174,11 +220,59 @@ results = train_and_evaluate_models(X, y, n_splits=5, random_state=42)
 # Print detailed results
 print_cv_results(results)
 
-# Save the model with better average RMSE
-if results['single_model']['cv_stats']['test_rmse']['mean'] < results['stacked_model']['cv_stats']['test_rmse']['mean']:
-    best_model = results['single_model']['model']
-else:
-    best_model = results['stacked_model']['model']
 
-joblib.dump(best_model, os.path.join(DATA_PATH, 'best_model.joblib'))
 """
+
+# Print results for each model
+for name, model_info in models.items():
+    print(f"\n{name}:")
+    print(f"Best RMSE: {model_info['best_score']:.3f}")
+    print("Best parameters:", model_info['best_params'])
+
+if __name__ == "__main__":
+    # #TRAIN DATA
+    # Process training data
+    # print("Processing training data...")
+    # train_metadata_path = os.path.join(METADATA_PATH, "training_metadata.csv")
+    # train_data = process_dataset(TRAIN_PATH, train_metadata_path)
+    
+    # # Save processed data
+    # train_data.to_csv(os.path.join(DATA_PATH, 'processed_train_data.csv'), index=False)
+    # print(f"Processed data saved to {DATA_PATH}")
+    
+    # # #TEST DATA
+    # # Process testing data
+    # test_metadata_path = os.path.join(METADATA_PATH, "test_metadata.csv")
+    # test_data = process_dataset(TEST_PATH, test_metadata_path)
+    
+    # # Save processed data
+    # test_data.to_csv(os.path.join(DATA_PATH, 'processed_test_data.csv'), index=False)
+    # print(f"Processed data saved to {DATA_PATH}")
+    
+    train_data = pd.read_csv(os.path.join(DATA_PATH, 'processed_train_data.csv'))
+    print(train_data.head(), train_data.shape)
+    # Prepare data for modeling
+    feature_cols = [col for col in train_data.columns if col not in ['participant_id', 'age']]
+    X = train_data[feature_cols]
+    y = train_data['age']
+    
+    # Split data
+    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
+    
+    # Preprocess data
+    X_enc, encoders = preprocess_data(X, is_training=True)
+    X_val, _ = preprocess_data(X_val, encoders=encoders, is_training=False)
+    
+    # Train and evaluate multiple models
+    results = train_and_evaluate_models(X_enc, y, n_splits=5, random_state=42)
+    
+    # Print detailed results
+    print_cv_results(results)
+
+    # Save the model with better average RMSE
+    if results['single_model']['cv_stats']['test_rmse']['mean'] < results['stacked_model']['cv_stats']['test_rmse']['mean']:
+        best_model = results['single_model']['model']
+    else:
+        best_model = results['stacked_model']['model']
+        
+print("Model training complete!")
