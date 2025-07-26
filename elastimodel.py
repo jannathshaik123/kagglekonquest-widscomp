@@ -1,3 +1,4 @@
+
 from sklearn.pipeline import Pipeline
 import pandas as pd
 import numpy as np
@@ -21,15 +22,6 @@ DATA_PATH = "data"  # New folder for processed data
 
 # Create data directory if it doesn't exist
 os.makedirs(DATA_PATH, exist_ok=True)
-
-# def extract_subject_id(filename):
-#     """
-#     Extract subject ID from the complex filename format
-#     Example: sub-NDARAA075AMK_ses-HBNsiteSI_task-rest_acq-VARIANTObliquity_atlas-Schaefer2018p200n17_space-MNI152NLin6ASym_reg-36Parameter_desc-PearsonNilearn_correlations.tsv
-#     """
-#     # Extract the subject ID (everything between 'sub-' and the first '_')
-#     subject_id = filename.split('sub-')[1].split('_')[0]
-#     return subject_id
 
 def preprocess_data(data, encoders=None, is_training=True):
     """
@@ -59,41 +51,6 @@ def preprocess_data(data, encoders=None, is_training=True):
             data[col] = data[col].fillna(data[col].mean())
     
     return data, encoders
-
-# def load_and_process_connectome(file_path):
-#     """Load and process a single connectome matrix"""
-#     matrix = pd.read_csv(file_path, sep='\t', header=None)
-#     upper_tri = matrix.values[np.triu_indices(200, k=1)]
-#     return upper_tri
-
-# def process_dataset(folder_path, metadata_path=None):
-#     """Process dataset and save to file"""
-#     features = []
-#     subject_ids = []
-    
-#     print("Processing connectome matrices...")
-#     for file in os.listdir(folder_path):
-#         if file.endswith('.tsv'):
-#             subject_id = extract_subject_id(file)
-#             file_path = os.path.join(folder_path, file)
-#             try:
-#                 connectome_features = load_and_process_connectome(file_path)
-#                 features.append(connectome_features)
-#                 subject_ids.append(subject_id)
-#             except Exception as e:
-#                 print(f"Error processing {file}: {str(e)}")
-    
-#     # Create DataFrame
-#     feature_names = [f'feature_{i}' for i in range(len(features[0]))]
-#     df = pd.DataFrame(features, columns=feature_names)
-#     df['participant_id'] = subject_ids
-    
-#     # Merge with metadata if provided
-#     if metadata_path:
-#         metadata = pd.read_csv(metadata_path)
-#         df = pd.merge(df, metadata, on='participant_id', how='left')
-    
-#     return df
 
 
 def enhance_connectome_features(features_df):
@@ -257,15 +214,20 @@ def print_cv_results(results):
 
 # Example usage:
 """
-# Assuming you have your data split into X_train, X_test, y_train, y_test
-models = train_elastic_models(X_train, y_train, X_test, y_test)
+# Train and evaluate models with cross-validation
+results = train_and_evaluate_models(X, y, n_splits=5, random_state=42)
+
+# Print detailed results
+print_cv_results(results)
+
+
+"""
 
 # Print results for each model
 for name, model_info in models.items():
     print(f"\n{name}:")
     print(f"Best RMSE: {model_info['best_score']:.3f}")
     print("Best parameters:", model_info['best_params'])
-"""
 
 if __name__ == "__main__":
     # #TRAIN DATA
